@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""fluxd — Fleet daemon for the flux_bridge ecosystem.
+Starts a SwarmRouter with all 16 fleet-midi agents, loads characters
+from SQLite, exposes HTTP health check, handles graceful shutdown.
+
+Usage:
+    fluxd                        # Start on default port 2176
+    fluxd --port 8080            # Custom port
+    fluxd --db /path/to/db.sqlite
+    fluxd --status               # Print all agent statuses and exit
+"""
+import sys, os, json, time, signal
+
+ws = os.path.expanduser('~/.openclaw/workspace')
+for p in [ws, os.path.join(ws, 'fleet-characters')]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+from flux_bridge.fleet_adapter import create_http_adapter, FleetAdapter
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='FLUX Fleet Daemon')
+    parser.add_argument('--port', type=int, default=2176, help='HTTP server port')
+    parser.add_argument('--host', default='localhost', help='HTTP server host')
+    parser.add_argument('--db', default=None, help='SQLite database path')
+    parser.add_argument('--status', action='store_true', help='Print status and exit')
+    args = parser.parse_args()
+
+    if args.status:
+        adapter = FleetAdapter(args.db)
+        status = adapter.status()
+        print(json.dumps(status, indent=2))
+        agent_count = len(status)
+        total_req = sum(s['total_requests'] for s in status.values())
+        avg_level = sum(s['level'] for s in status.values()) / max(agent_count, 1)
+        print(f'\nAgents: {agent_count} | Total requests: {total_req} | Avg level: {avg_level:.1f}')
+        adapter.close()
+        return
+
+    server = create_http_adapter(args.host, args.port, args.db)
+    adapter = server.adapter
+
+    # Graceful shutdown
+    def shutdown(signum, frame):
+        print('\nShutting down gracefully...')
+        adapter.save_all()
+        print('All agents saved to database.')
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+
+    agent_count = len(adapter.agents)
+    print(f'🧪 fluxd v0.1.0 — FLUX Fleet Daemon')
+    print(f'   HTTP: http://{args.host}:{args.port}')
+    print(f'   Agents: {agent_count}')
+    print(f'   DB: {args.db or "~/.openclaw/fleet-characters.db"}')
+    print(f'   Status: http://{args.host}:{args.port}/status')
+    print(f'   Health: http://{args.host}:{args.port}/health')
+    print(f'   Teach:  POST /teach {"{"}"intent": "add 42 and 7"{"}"}')
+    print(f'   A2A:    POST /a2a {"{"}"domain": "chord", "message_type": "Ask"...{"}"}')
+    print()
+    print(f'All 16 agents loaded and ready.')
+    print(f'Listening...')
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        shutdown(None, None)
+
+
+if __name__ == '__main__':
+    main()

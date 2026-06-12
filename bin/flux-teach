@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""flux-teach — Teach agent reflexes via FLUX bytecode.
+Takes natural language intent, generates FLUX bytecode, validates,
+and optionally saves as a teach reflex.
+
+Usage:
+    flux-teach "add 42 and 7"
+    flux-teach "compute 6 times 7"
+    flux-teach --save "loop 5 times" chord
+"""
+import sys, os, json, re
+
+ws = os.path.expanduser('~/.openclaw/workspace')
+for p in [ws, os.path.join(ws, 'fleet-characters')]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+from flux_bridge.bytecode import Assembler, Disassembler, validate
+
+
+def parse_intent(intent: str) -> list:
+    """Parse natural language intent into FLUX assembly instructions."""
+    intent_lower = intent.lower()
+    instrs = []
+
+    # Pattern: "add X and Y" or "X + Y"
+    add_m = re.search(r'(?:add|plus|\+)\s*(\d+)\s*(?:and|to|with|\+)?\s*(\d+)', intent_lower)
+    if add_m:
+        a, b = int(add_m.group(1)), int(add_m.group(2))
+        instrs.extend([
+            f'MOVI R0, {a}',
+            f'MOVI R1, {b}',
+            'IADD R0, R1',
+            'HALT',
+        ])
+        return instrs
+
+    # Pattern: "multiply X by Y" or "X times Y"
+    mul_m = re.search(r'(?:multiply|times|product of)\s*(\d+)\s*(?:by|and|times)?\s*(\d+)', intent_lower)
+    if mul_m:
+        a, b = int(mul_m.group(1)), int(mul_m.group(2))
+        instrs.extend([
+            f'MOVI R0, {a}',
+            f'MOVI R1, {b}',
+            'IMUL R0, R1',
+            'HALT',
+        ])
+        return instrs
+
+    # Pattern: "loop X times" or "count to X"
+    loop_m = re.search(r'(?:loop|count|repeat)\s*(\d+)', intent_lower)
+    if loop_m:
+        n = int(loop_m.group(1))
+        instrs.extend([
+            f'MOVI R0, {n}',
+            'label loop',
+            'DEC R0',
+            f'JNZ R0, loop',
+            'HALT',
+        ])
+        return instrs
+
+    # Pattern: "compute (expression)"
+    compute_m = re.search(r'compute\s+(\d+)\s*([+\-*/])\s*(\d+)', intent_lower)
+    if compute_m:
+        a, op, b = int(compute_m.group(1)), compute_m.group(2), int(compute_m.group(3))
+        ops_map = {'+': 'IADD', '-': 'ISUB', '*': 'IMUL', '/': 'IDIV'}
+        instrs.extend([
+            f'MOVI R0, {a}',
+            f'MOVI R1, {b}',
+            f'{ops_map[op]} R0, R1',
+            'HALT',
+        ])
+        return instrs
+
+    # Pattern: "subtract X from Y"
+    sub_m = re.search(r'(?:subtract|minus)\s*(\d+)\s*(?:from|and)?\s*(\d+)', intent_lower)
+    if sub_m:
+        a, b = int(sub_m.group(1)), int(sub_m.group(2))
+        instrs.extend([
+            f'MOVI R1, {a}',
+            f'MOVI R0, {b}',
+            'ISUB R0, R1',
+            'HALT',
+        ])
+        return instrs
+
+    # Default: simple store
+    num_m = re.search(r'store\s*(\d+)', intent_lower)
+    if num_m:
+        val = int(num_m.group(1))
+        instrs.extend([
+            f'MOVI R0, {val}',
+            'HALT',
+        ])
+        return instrs
+
+    return None
+
+
+def assemble_instrs(instrs: list) -> bytes:
+    """Convert parsed instructions to bytecode."""
+    a = Assembler()
+    labels = {}
+
+    for instr in instrs:
+        parts = instr.replace(',', '').split()
+        if not parts:
+            continue
+        op = parts[0].upper()
+
+        if op == 'LABEL':
+            labels[parts[1]] = True
+            a.label(parts[1])
+        elif op == 'MOVI' and len(parts) >= 3:
+            a.emit_mov_i(int(parts[1].lstrip('Rr')), int(parts[2]))
+        elif op in ('IADD', 'ADD') and len(parts) >= 3:
+            a.emit_add(int(parts[1].lstrip('Rr')), int(parts[2].lstrip('Rr')))
+        elif op in ('ISUB', 'SUB') and len(parts) >= 3:
+            a.emit_sub(int(parts[1].lstrip('Rr')), int(parts[2].lstrip('Rr')))
+        elif op in ('IMUL', 'MUL') and len(parts) >= 3:
+            a.emit_mul(int(parts[1].lstrip('Rr')), int(parts[2].lstrip('Rr')))
+        elif op in ('IDIV', 'DIV') and len(parts) >= 3:
+            a.emit_div(int(parts[1].lstrip('Rr')), int(parts[2].lstrip('Rr')))
+        elif op == 'DEC' and len(parts) >= 2:
+            a.emit_dec(int(parts[1].lstrip('Rr')))
+        elif op == 'INC' and len(parts) >= 2:
+            a.emit_inc(int(parts[1].lstrip('Rr')))
+        elif op in ('JNZ', 'JMP') and len(parts) >= 2:
+            target = parts[1]
+            a.emit_jnz(0, target)
+        elif op == 'HALT':
+            a.emit_halt()
+        elif op == 'NOP':
+            a.emit_nop()
+        elif op == 'MOV' and len(parts) >= 3:
+            a.emit_mov(int(parts[1].lstrip('Rr')), int(parts[2].lstrip('Rr')))
+
+    return a.assemble()
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='Teach FLUX bytecode reflexes')
+    parser.add_argument('intent', nargs='*', help='Natural language intent')
+    parser.add_argument('--save', metavar='AGENT', help='Save to agent domain')
+    parser.add_argument('--list', action='store_true', help='List supported patterns')
+    args = parser.parse_args()
+
+    if args.list:
+        print('Supported intent patterns:')
+        print('  "add X and Y"          → MOVI + IADD')
+        print('  "multiply X by Y"       → MOVI + IMUL')
+        print('  "loop X times"          → MOVI + DEC + JNZ')
+        print('  "compute X + Y"         → MOVI + IADD')
+        print('  "subtract X from Y"     → MOVI + ISUB')
+        print('  "store X"               → MOVI')
+        print('  "X + Y" / "X * Y"       → operator detection')
+        return 0
+
+    intent = ' '.join(args.intent) if args.intent else sys.stdin.read().strip()
+    if not intent:
+        parser.print_help()
+        sys.exit(1)
+
+    instrs = parse_intent(intent)
+    if instrs is None:
+        print(f'Could not parse intent: "{intent}"')
+        print('Try: flux-teach --list  (for supported patterns)')
+        sys.exit(1)
+
+    bc = assemble_instrs(instrs)
+    vr = validate(bc)
+
+    result = {
+        'intent': intent,
+        'instructions': instrs,
+        'bytecode_hex': bc.hex(),
+        'bytecode_bytes': len(bc),
+        'valid': vr.safe,
+        'warnings': [str(w) for w in vr.warnings],
+        'disassembly': Disassembler.disassemble_to_text(bc),
+    }
+
+    if args.save:
+        from flux_bridge.fleet_adapter import FleetAdapter
+        adapter = FleetAdapter()
+        agent = adapter.get_agent(args.save)
+        if agent:
+            result['saved_to'] = args.save
+        else:
+            print(f'Unknown agent domain: {args.save}')
+            print(f'Available: chord, scale, voicing, tempo, cc, expression, dynamics, pan, modulation, arp, groove, velocity, fx, register, melody, bass')
+
+    print(json.dumps(result, indent=2))
+    return 0 if vr.safe else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

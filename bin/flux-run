@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""flux-run — One-shot FLUX bytecode runner.
+Reads bytecode hex from stdin or --hex arg, executes on PythonInterpreter,
+outputs JSON result with registers, cycles, error.
+
+Usage:
+    echo '2b002a002b01070008000180' | flux-run
+    flux-run --hex "2b002a002b01070008000180"
+    flux-run --asm "MOVI R0, 42; HALT"
+"""
+import sys, os, json
+
+ws = os.path.expanduser('~/.openclaw/workspace')
+for p in [ws, os.path.join(ws, 'fleet-characters')]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+from flux_bridge.vm_harness import PythonInterpreter
+from flux_bridge.bytecode import Assembler, Disassembler, validate
+
+
+def run_bytecode(bc: bytes) -> dict:
+    vr = validate(bc)
+    result = PythonInterpreter().execute(bc)
+    return {
+        'success': result.success,
+        'halted': result.halted,
+        'registers': result.registers[:8],
+        'fp_registers': [round(f, 4) for f in result.fp_registers[:4]],
+        'cycles': result.cycles_used,
+        'error': result.error,
+        'bytecode_hex': bc.hex(),
+        'disasm': Disassembler.disassemble_to_text(bc),
+        'valid': vr.safe,
+        'validation_errors': [str(e) for e in vr.errors],
+        'validation_warnings': [str(w) for w in vr.warnings],
+    }
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='FLUX bytecode runner')
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--hex', help='Bytecode as hex string')
+    group.add_argument('--asm', help='Assembly text (semicolon-separated)')
+    parser.add_argument('--pretty', action='store_true', help='Pretty-print JSON')
+    parser.add_argument('--raw', action='store_true', help='Only output register values')
+    args = parser.parse_args()
+
+    if args.hex:
+        bc = bytes.fromhex(args.hex)
+    elif args.asm:
+        a = Assembler()
+        for instr in args.asm.split(';'):
+            instr = instr.strip()
+            if not instr:
+                continue
+            parts = instr.split()
+            if not parts:
+                continue
+            op = parts[0].upper()
+            if op == 'MOVI' and len(parts) >= 3:
+                reg = int(parts[1].lstrip('Rr'))
+                val = int(parts[2])
+                a.emit_mov_i(reg, val)
+            elif op in ('IADD', 'ADD') and len(parts) >= 3:
+                a.emit_add(int(parts[1].lstrip('Rr')), int(parts[2].lstrip('Rr')))
+            elif op == 'HALT':
+                a.emit_halt()
+            elif op == 'NOP':
+                a.emit_nop()
+            else:
+                sys.stderr.write(f'Unknown instruction: {instr}\n')
+                sys.exit(1)
+        bc = a.assemble()
+    else:
+        hex_str = sys.stdin.read().strip()
+        if not hex_str:
+            parser.print_help()
+            sys.exit(1)
+        bc = bytes.fromhex(hex_str)
+
+    result = run_bytecode(bc)
+
+    if args.raw:
+        vals = result['registers']
+        print(' '.join(str(v) for v in vals if v is not None))
+    elif args.pretty:
+        print(json.dumps(result, indent=2))
+    else:
+        if result['success']:
+            print(f"OK regs={result['registers'][:4]} cyc={result['cycles']}")
+        else:
+            print(f"FAIL {result['error']}")
+            sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
