@@ -1,0 +1,120 @@
+[
+  {
+    "id": "example-1",
+    "natural_language": "Add 42 and 7, store the result in R2",
+    "intent": "arithmetic",
+    "constraints": {
+      "inputs": {"a": 42, "b": 7},
+      "output_register": 2
+    },
+    "bytecode_asm": [
+      "MOVI R0, 42",
+      "MOVI R1, 7",
+      "MOV R2, R0",
+      "IADD R2, R1",
+      "HALT"
+    ],
+    "bytecode_hex": "2b002a002b010700022000080280",
+    "bytecode_bytes": [43, 0, 42, 0, 43, 1, 7, 0, 2, 2, 0, 8, 2, 128],
+    "expected_registers": {
+      "r0": 42,
+      "r1": 7,
+      "r2": 49
+    },
+    "explanation": "Load 42 into R0, 7 into R1. Copy R0 to R2, then add R1 to R2. R2 = 49."
+  },
+  {
+    "id": "example-2",
+    "natural_language": "Loop 5 times, decrementing R0 each iteration. Start with R0 = 5 and stop when zero.",
+    "intent": "loop",
+    "constraints": {
+      "iterations": 5,
+      "counter_register": 0
+    },
+    "bytecode_asm": [
+      "MOVI R0, 5",
+      "loop:",
+      "  DEC R0",
+      "  JNZ R0, loop",
+      "HALT"
+    ],
+    "bytecode_hex": "2b0005000f000605fbff80",
+    "bytecode_bytes": [43, 0, 5, 0, 15, 0, 6, 5, 251, 255, 128],
+    "expected_registers": {
+      "r0": 0
+    },
+    "explanation": "R0 starts at 5. Each iteration decrements R0. JNZ checks if R0 != 0 and jumps back 5 bytes (relative offset -5). After 5 iterations, R0 = 0, JNZ falls through to HALT. JNZ format: opcode(1) + reg(1) + offset_lo(1) + offset_hi(1). Offset is -5 = 0xFFFB as signed i16."
+  },
+  {
+    "id": "example-3",
+    "natural_language": "Agent A sends Agent B a 'ready' signal using the TELL protocol.",
+    "intent": "agent_communication",
+    "constraints": {
+      "sender": "AgentA",
+      "receiver": "AgentB",
+      "message_type": "TELL"
+    },
+    "bytecode_asm": [
+      "MOVI R0, 'r'",
+      "TELL R0",
+      "HALT"
+    ],
+    "bytecode_hex": "2b0072006080",
+    "bytecode_bytes": [43, 0, 114, 0, 96, 0, 128],
+    "expected_registers": {
+      "r0": 114
+    },
+    "explanation": "Load ASCII 'r' (114) into R0. TELL R0 sends the byte 114 as the payload to the registered receiver agent. The A2A router handles delivery. HALT completes."
+  },
+  {
+    "id": "example-4",
+    "natural_language": "Compare R0 and R1. If they are equal, jump to 'equal_label'. If not, jump to 'not_equal_label'.",
+    "intent": "conditional_branch",
+    "constraints": {
+      "comparison": "equality",
+      "registers": [0, 1]
+    },
+    "bytecode_asm": [
+      "CMP R0, R1",
+      "JZ R0, equal_label",
+      "JMP not_equal_label",
+      "equal_label:",
+      "  MOVI R2, 1",
+      "  HALT",
+      "not_equal_label:",
+      "  MOVI R2, 0",
+      "  HALT"
+    ],
+    "bytecode_hex": "2d00010d020600ff02000a002b00010080020000002b01000080",
+    "bytecode_bytes": [45, 0, 1, 13, 0, 6, 0, 255, 2, 0, 10, 0, 43, 0, 1, 0, 128, 0, 0, 43, 1, 0, 0, 128],
+    "expected_registers": {
+      "r2": "1 if equal, 0 if not"
+    },
+    "explanation": "CMP R0, R1 sets zero flag if R0 == R1. JZ R0 checks the register and jumps to equal_label if zero. Otherwise falls through to JMP not_equal_label. Labels resolve to relative offsets during assembly."
+  },
+  {
+    "id": "example-5",
+    "natural_language": "Compute 2 * (3 + 4) and store the result in R3.",
+    "intent": "arithmetic",
+    "constraints": {
+      "formula": "2 * (3 + 4)",
+      "output_register": 3
+    },
+    "bytecode_asm": [
+      "MOVI R0, 3",
+      "MOVI R1, 4",
+      "IADD R0, R1",
+      "MOVI R2, 2",
+      "IMUL R0, R2",
+      "MOV R3, R0",
+      "HALT"
+    ],
+    "bytecode_hex": "2b0003002b0104000800012b0002000a0002010380",
+    "bytecode_bytes": [43, 0, 3, 0, 43, 1, 4, 0, 8, 0, 1, 43, 0, 2, 0, 10, 0, 2, 1, 3, 128],
+    "expected_registers": {
+      "r0": 14,
+      "r3": 14
+    },
+    "explanation": "Compute inside-out: 3+4=7 in R0 (via IADD R0,R1), then 2*7=14 in R0 (via IMUL R0,R2), then copy to R3. R3 = 14."
+  }
+]

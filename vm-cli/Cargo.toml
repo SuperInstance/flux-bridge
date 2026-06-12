@@ -1,0 +1,12 @@
+[package]
+name = "flux-vm-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI wrapper around flux-core VM — reads bytecode from stdin, outputs JSON to stdout"
+
+[[bin]]
+name = "flux-vm"
+path = "src/main.rs"
+
+[dependencies]
+flux-core = { path = "../../flux-core" }
